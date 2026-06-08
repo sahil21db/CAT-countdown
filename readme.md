@@ -1,0 +1,1 @@
+do pip install discord.py pillow python-dotenv
