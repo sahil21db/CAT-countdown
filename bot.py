@@ -111,9 +111,9 @@ async def daily_countdown():
             continue
 
         channel_id = settings.get("channel_id")
-        post_time = settings.get("post_time", "08:00")
+        post_time = settings.get("post_time")
 
-        if not channel_id or current_time != post_time:
+        if not channel_id or not post_time or current_time != post_time:
             continue
         if last_posted_date.get(guild_id) == today:
             continue
@@ -160,6 +160,7 @@ async def custom_help(ctx):
     )
     
     embed.add_field(name="`?status`", value="Show the current countdown immediately.", inline=False)
+    embed.add_field(name="`?next`", value="Show how much time is left until the next daily announcement.", inline=False)
     embed.add_field(name="`?countit`", value="Manually trigger the full daily post (Pings @everyone).\n*(Admin Only)*", inline=False)
     embed.add_field(name="`?setchannel #channel`", value="Set the channel where the daily countdown is posted.\n*(Admin Only)*", inline=False)
     embed.add_field(name="`?settime HH:MM`", value="Set the time for the daily post (24-hour server time).\n*(Admin Only)*", inline=False)
@@ -183,7 +184,9 @@ async def setchannel(ctx, channel: discord.TextChannel):
 async def settime(ctx, time_str: str):
     """Set the daily post time (HH:MM, 24-hour format)."""
     try:
-        datetime.datetime.strptime(time_str, "%H:%M")
+        parsed_time = datetime.datetime.strptime(time_str, "%H:%M")
+        # Standardize the time string to always have a leading zero (e.g., "8:00" -> "08:00")
+        time_str = parsed_time.strftime("%H:%M")
     except ValueError:
         await ctx.send("❌ Invalid format. Use `HH:MM` (24h), e.g. `08:00` or `14:30`.")
         return
@@ -208,6 +211,32 @@ async def setexamdate(ctx, date_str: str):
     config_data.setdefault(guild_id, {})["exam_date"] = date_str
     save_config(config_data)
     await ctx.send(f"✅ Exam date set to `{date_str}`")
+
+
+@bot.command(name="next")
+async def next_cmd(ctx):
+    """Show the time remaining until the next daily announcement."""
+    guild_id = str(ctx.guild.id)
+    post_time_str = config_data.get(guild_id, {}).get("post_time")
+    
+    if not post_time_str:
+        await ctx.send("❌ No daily post time has been set for this server yet. An Admin must set it using `?settime HH:MM`.")
+        return
+        
+    now = datetime.datetime.now()
+    target_time = datetime.datetime.strptime(post_time_str, "%H:%M").time()
+    next_post = datetime.datetime.combine(now.date(), target_time)
+    
+    # If the target time has already passed today, the next post is tomorrow
+    if next_post < now:
+        next_post += datetime.timedelta(days=1)
+        
+    delta = next_post - now
+    total_seconds = int(delta.total_seconds())
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+    
+    await ctx.send(f"⏳ The next announcement will be posted in **{hours} hours and {minutes} minutes**.")
 
 
 @bot.command()
