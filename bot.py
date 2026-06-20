@@ -44,7 +44,6 @@ def save_config(config):
 
 
 config_data = load_config()
-last_posted_date: dict[str, str] = {}
 
 def get_exam_date(guild_id: str) -> datetime.date:
     """Get the specific exam date for a server, or fallback to default."""
@@ -100,42 +99,43 @@ def generate_countdown_image(days_left: int) -> io.BytesIO:
 async def daily_countdown():
     """Check once per minute whether it's time to post the countdown."""
     now = datetime.datetime.now()
-    today = now.strftime("%Y-%m-%d")
     current_time = now.strftime("%H:%M")
 
     for guild_id, settings in config_data.items():
+        # Skip disabled servers
+        if settings.get("disabled", False):
+            continue
+
         exam_date = get_exam_date(guild_id)
         days_left = (exam_date - now.date()).days
         
         if days_left < 0:
             continue
 
-        channel_id = settings.get("channel_id")
+        channel_ids = settings.get("channel_ids", [])
         post_time = settings.get("post_time")
 
-        if not channel_id or not post_time or current_time != post_time:
-            continue
-        if last_posted_date.get(guild_id) == today:
+        if not channel_ids or not post_time or current_time != post_time:
             continue
 
-        channel = bot.get_channel(channel_id)
-        if channel is None:
-            continue
+        for channel_id in channel_ids:
+            channel = bot.get_channel(channel_id)
+            if channel is None:
+                continue
 
-        try:
-            img = generate_countdown_image(days_left)
-            file = discord.File(fp=img, filename="countdown.png")
-            await channel.send(
-                content=(
-                    f"@everyone **{days_left} Days until CAT 2026!**\n"
-                    "Keep grinding, stay focused, and make today count. Let's get it! 🚀"
-                ),
-                file=file,
-            )
-            last_posted_date[guild_id] = today
-            print(f"Posted countdown to #{channel.name} ({guild_id})")
-        except Exception as exc:
-            print(f"Failed to post to #{channel.name}: {exc}")
+            try:
+                img = generate_countdown_image(days_left)
+                file = discord.File(fp=img, filename="countdown.png")
+                await channel.send(
+                    content=(
+                        f"**{days_left} Days until CAT 2026!**\n"
+                        "Keep grinding, stay focused, and make today count. Let's get it! 🚀"
+                    ),
+                    file=file,
+                )
+                print(f"Posted countdown to #{channel.name} ({guild_id})")
+            except Exception as exc:
+                print(f"Failed to post to #{channel.name}: {exc}")
 
 
 @daily_countdown.before_loop
@@ -161,22 +161,118 @@ async def custom_help(ctx):
     
     embed.add_field(name="`?status`", value="Show the current countdown immediately.", inline=False)
     embed.add_field(name="`?next`", value="Show how much time is left until the next daily announcement.", inline=False)
-    embed.add_field(name="`?countit`", value="Manually trigger the full daily post (Pings @everyone).\n*(Admin Only)*", inline=False)
-    embed.add_field(name="`?setchannel #channel`", value="Set the channel where the daily countdown is posted.\n*(Admin Only)*", inline=False)
+    embed.add_field(name="`?countit`", value="Manually trigger the full daily post.\n*(Admin Only)*", inline=False)
+    embed.add_field(name="`?addchannel #channel`", value="Add a channel for the daily countdown.\n*(Admin Only)*", inline=False)
+    embed.add_field(name="`?remchannel`", value="Remove a channel from the daily countdown.\n*(Admin Only)*", inline=False)
+    embed.add_field(name="`?listchannels`", value="List all channels anchored for the daily countdown.", inline=False)
     embed.add_field(name="`?settime HH:MM`", value="Set the time for the daily post (24-hour server time).\n*(Admin Only)*", inline=False)
     embed.add_field(name="`?setexamdate YYYY-MM-DD`", value="Set the target exam date for your server.\n*(Admin Only)*", inline=False)
+    embed.add_field(name="`?disable`", value="Toggle the daily countdown on/off for this server.\n*(Admin Only)*", inline=False)
     
     await ctx.send(embed=embed)
 
 
 @bot.command()
 @commands.has_permissions(administrator=True)
-async def setchannel(ctx, channel: discord.TextChannel):
-    """Set the channel for the daily countdown."""
+async def addchannel(ctx, channel: discord.TextChannel):
+    """Add a channel for the daily countdown."""
     guild_id = str(ctx.guild.id)
-    config_data.setdefault(guild_id, {})["channel_id"] = channel.id
+    config_data.setdefault(guild_id, {}).setdefault("channel_ids", [])
+
+    if channel.id in config_data[guild_id]["channel_ids"]:
+        await ctx.send(f"⚠️ {channel.mention} is already in the countdown list.")
+        return
+
+    config_data[guild_id]["channel_ids"].append(channel.id)
     save_config(config_data)
-    await ctx.send(f"✅ Daily countdown channel set to {channel.mention}")
+    await ctx.send(f"✅ Added {channel.mention} to the daily countdown.")
+
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def remchannel(ctx):
+    """Interactively remove a channel from the daily countdown."""
+    guild_id = str(ctx.guild.id)
+    channel_ids = config_data.get(guild_id, {}).get("channel_ids", [])
+
+    if not channel_ids:
+        await ctx.send("❌ No channels are set for the daily countdown.")
+        return
+
+    # Build a numbered list of channels
+    lines = []
+    for i, cid in enumerate(channel_ids, start=1):
+        ch = bot.get_channel(cid)
+        name = ch.mention if ch else f"Unknown (`{cid}`)"
+        lines.append(f"**{i}.** {name}")
+
+    listing = "\n".join(lines)
+    await ctx.send(
+        f"**Which channel do you want to remove?**\n{listing}\n\n"
+        "Reply with the number (e.g. `1`)."
+    )
+
+    def check(m):
+        return m.author == ctx.author and m.channel == ctx.channel and m.content.isdigit()
+
+    try:
+        reply = await bot.wait_for("message", check=check, timeout=30)
+    except Exception:
+        await ctx.send("⏰ Timed out. No channel was removed.")
+        return
+
+    idx = int(reply.content) - 1
+    if idx < 0 or idx >= len(channel_ids):
+        await ctx.send("❌ Invalid number. No channel was removed.")
+        return
+
+    removed_id = channel_ids.pop(idx)
+    save_config(config_data)
+
+    ch = bot.get_channel(removed_id)
+    name = ch.mention if ch else f"`{removed_id}`"
+    await ctx.send(f"✅ Removed {name} from the daily countdown.")
+
+
+@bot.command()
+async def listchannels(ctx):
+    """List all channels anchored for the daily countdown."""
+    guild_id = str(ctx.guild.id)
+    channel_ids = config_data.get(guild_id, {}).get("channel_ids", [])
+
+    if not channel_ids:
+        await ctx.send("📭 No channels are set for the daily countdown.")
+        return
+
+    lines = []
+    for i, cid in enumerate(channel_ids, start=1):
+        ch = bot.get_channel(cid)
+        name = ch.mention if ch else f"Unknown (`{cid}`)"
+        lines.append(f"**{i}.** {name}")
+
+    embed = discord.Embed(
+        title="📋 Countdown Channels",
+        description="\n".join(lines),
+        color=0x10b981,
+    )
+    await ctx.send(embed=embed)
+
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def disable(ctx):
+    """Toggle the daily countdown on or off for this server."""
+    guild_id = str(ctx.guild.id)
+    config_data.setdefault(guild_id, {})
+
+    currently_disabled = config_data[guild_id].get("disabled", False)
+    config_data[guild_id]["disabled"] = not currently_disabled
+    save_config(config_data)
+
+    if not currently_disabled:
+        await ctx.send("⏸️ Daily countdown has been **disabled** for this server.")
+    else:
+        await ctx.send("▶️ Daily countdown has been **re-enabled** for this server.")
 
 
 @bot.command()
@@ -260,7 +356,7 @@ async def status(ctx):
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def countit(ctx):
-    """Post the full daily countdown message on demand (Pings @everyone)."""
+    """Post the full daily countdown message on demand."""
     guild_id = str(ctx.guild.id)
     exam_date = get_exam_date(guild_id)
     days_left = (exam_date - datetime.date.today()).days
@@ -273,7 +369,7 @@ async def countit(ctx):
         img = generate_countdown_image(days_left)
         file = discord.File(fp=img, filename="countdown.png")
         msg = (
-            f"@everyone **{days_left} Days until CAT 2026!**\n"
+            f"**{days_left} Days until CAT 2026!**\n"
             "Keep grinding, stay focused, and make today count. Let's get it! 🚀"
         )
         await ctx.send(content=msg, file=file)
