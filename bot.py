@@ -287,6 +287,12 @@ async def cmd_set(ctx, channel: discord.TextChannel, time_str: str):
     await ctx.send(f"✅ {channel.mention} will now post daily at `{time_str}`.")
 
 
+@cmd_set.error
+async def cmd_set_error(ctx, error):
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send("❌ Usage: `>set #channel HH:MM`")
+
+
 # ── >list ─────────────────────────────────────────────────────────────────────
 
 @bot.command(name="list")
@@ -420,6 +426,12 @@ async def cmd_toggle(ctx, channel: discord.TextChannel):
         await ctx.send(f"⏸️ {channel.mention} has been **disabled**.")
 
 
+@cmd_toggle.error
+async def cmd_toggle_error(ctx, error):
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send("❌ Usage: `>toggle #channel`")
+
+
 # ── >exam ─────────────────────────────────────────────────────────────────────
 
 @bot.command(name="exam")
@@ -436,6 +448,12 @@ async def cmd_exam(ctx, date_str: str):
     guild_cfg(guild_id)["exam_date"] = date_str
     save_config(config_data)
     await ctx.send(f"✅ Exam date set to `{date_str}`.")
+
+
+@cmd_exam.error
+async def cmd_exam_error(ctx, error):
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send("❌ Usage: `>exam YYYY-MM-DD`")
 
 # ── Entrypoint ───────────────────────────────────────────────────────────────
 
